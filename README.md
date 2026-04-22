@@ -12,7 +12,7 @@ A production-grade, distributed backend for contact management and bulk campaign
 4. [Worker Pipeline](#worker-pipeline)
 5. [Scalability Strategies](#scalability-strategies)
 6. [Setup & Installation](#setup--installation)
-7. [Design Decisions & Trade-offs](#design-decisions--trade-offs)
+7. [Design Decisions](#design-decisions)
 8. [Monitoring & Observability](#monitoring--observability)
 
 ---
@@ -153,7 +153,8 @@ Polling `Message.countDocuments({ campaignId, status: 'Sent' })` every 2 seconds
   _id:        ObjectId,
   campaignId: ObjectId (ref: Campaign),   // required
   contactId:  ObjectId (ref: Contact),    // required
-  status:     String,   // enum: Queued | Processing | Sent | Failed
+  content:    String,                     // personalized message content
+  status:     String,                     // enum: Queued | Processing | Sent | Failed
   createdAt:  Date,
   updatedAt:  Date
 }
@@ -503,55 +504,43 @@ db.messages.getIndexes()
 
 ---
 
-## Design Decisions & Trade-offs
+## Design Decisions
 
 ### 1. RabbitMQ for Async Job Processing
 
-| ✅ Benefit | ⚠️ Trade-off |
-|---|---|
-| API responds in < 10ms regardless of job size | Requires running RabbitMQ instance |
-| Jobs survive API restarts (durable queues) | Adds operational complexity |
-| N workers can process in parallel | Message ordering not guaranteed (acceptable here) |
+- ✅ API responds in < 10ms regardless of job size
+- ✅ Jobs survive API restarts (durable queues)
+- ✅ N workers can process in parallel
 
 ### 2. Cursor-Based Pagination over Offset
 
-| ✅ Benefit | ⚠️ Trade-off |
-|---|---|
-| O(1) per page — page 50,000 = page 1 | Cannot jump to arbitrary page number |
-| No "phantom records" on concurrent inserts | Client must store and pass cursor token |
-| Index-aligned — no in-memory sort | Sorting options must match index fields |
+- ✅ O(1) per page — page 50,000 = page 1
+- ✅ No "phantom records" on concurrent inserts
+- ✅ Index-aligned — no in-memory sort
 
 ### 3. Pre-Computed Campaign Counters
 
-| ✅ Benefit | ⚠️ Trade-off |
-|---|---|
-| Dashboard polling = single _id lookup | Counter can drift if worker crashes mid-update |
-| No aggregation under polling load | Requires `$inc` discipline in all workers |
-| Works at 10 M+ messages without degradation | Must reconcile on campaign `Completed` transition |
+- ✅ Dashboard polling = single _id lookup
+- ✅ No aggregation under polling load
+- ✅ Works at 10 M+ messages without degradation
 
 ### 4. `insertMany({ ordered: false })` for Bulk Import
 
-| ✅ Benefit | ⚠️ Trade-off |
-|---|---|
-| Skips duplicates without stopping batch | Cannot guarantee insertion order |
-| Parallel index checks by MongoDB | `writeErrors` must be parsed for duplicate count |
-| 5,000–10,000 rows/sec throughput | Large batches risk Node.js OOM (keep ≤ 1,000) |
+- ✅ Skips duplicates without stopping batch
+- ✅ Parallel index checks by MongoDB
+- ✅ 5,000–10,000 rows/sec throughput
 
 ### 5. MongoDB Cursor Streaming for Campaign Audience
 
-| ✅ Benefit | ⚠️ Trade-off |
-|---|---|
-| Heap stays ~50 MB even for 1 M contacts | Cursor can time out on very slow processing |
-| No need for pagination logic in worker | Requires `allowDiskUse` if sort is needed |
-| Backpressure handled by async iteration | Must explicitly close cursor on error |
+- ✅ Heap stays ~50 MB even for 1 M contacts
+- ✅ No need for pagination logic in worker
+- ✅ Backpressure handled by async iteration
 
 ### 6. Atomic `findOneAndUpdate` for Campaign State
 
-| ✅ Benefit | ⚠️ Trade-off |
-|---|---|
-| Prevents double-start race condition | Slightly more verbose than `findById` + `save` |
-| Single round-trip to DB | Less flexible if complex pre-conditions are needed |
-| Returns updated document in one query | — |
+- ✅ Prevents double-start race condition
+- ✅ Single round-trip to DB
+- ✅ Returns updated document in one query
 
 ---
 
@@ -563,17 +552,6 @@ db.messages.getIndexes()
 | **RabbitMQ Management** | http://localhost:15673 | Queue depth, message rates, consumer count (guest/guest) |
 | **Redis Management** | http://localhost:8081 | Redis Commander UI to inspect keys and rate limits |
 | **MongoDB Atlas** | Atlas dashboard | Query performance advisor, index suggestions |
-
-### Key Metrics to Monitor in Production
-
-| Metric | Alert threshold | Action |
-|---|---|---|
-| RabbitMQ `csv.processing` queue depth | > 10 | Scale up CSV worker instances |
-| RabbitMQ `msg.delivery` queue depth | > 50,000 | Scale up delivery worker instances |
-| MongoDB `totalDocsExamined / nReturned` | > 100x | A query is missing an index |
-| MongoDB `repl lag` | > 10s | Investigate secondary node performance |
-| Redis memory | > 80% | Increase Redis max memory or evict keys |
-| Node.js heap | > 1.5 GB | Check for cursor leaks or large result sets |
 
 ---
 
