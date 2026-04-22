@@ -457,7 +457,7 @@ Counters stored in Redis — consistent across all API instances. Redis failure 
 
 ### Prerequisites
 
-- Node.js ≥ 18
+- Node.js ≥ 22.14.0
 - Docker & Docker Compose (for RabbitMQ + Redis)
 - MongoDB Atlas cluster or local MongoDB ≥ 6.0
 
