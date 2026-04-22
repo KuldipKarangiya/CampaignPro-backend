@@ -33,16 +33,16 @@ module.exports = {
 
   RABBITMQ: {
     CSV_PROCESSING: {
-      PREFETCH: parseInt(process.env.CSV_PREFETCH) || 5,
-      CONSUMER_COUNT: parseInt(process.env.CSV_CONSUMERS) || 2
+      PREFETCH: parseInt(process.env.CSV_PREFETCH) || 1,
+      CONSUMER_COUNT: parseInt(process.env.CSV_CONSUMERS) || 1
     },
     CONTACT_CREATION: {
-      PREFETCH: parseInt(process.env.CONTACT_PREFETCH) || 10,
+      PREFETCH: parseInt(process.env.CONTACT_PREFETCH) || 5,
       CONSUMER_COUNT: parseInt(process.env.CONTACT_CONSUMERS) || 5
     },
     CAMPAIGN_EXECUTION: {
-      PREFETCH: parseInt(process.env.CAMPAIGN_PREFETCH) || 2,
-      CONSUMER_COUNT: parseInt(process.env.CAMPAIGN_CONSUMERS) || 2
+      PREFETCH: parseInt(process.env.CAMPAIGN_PREFETCH) || 1,
+      CONSUMER_COUNT: parseInt(process.env.CAMPAIGN_CONSUMERS) || 1
     },
     MESSAGE_DELIVERY: {
       PREFETCH: parseInt(process.env.DELIVERY_PREFETCH) || 50,
@@ -51,10 +51,10 @@ module.exports = {
   },
 
   BATCH_SIZES: {
-    CSV_PARSING: 50,
-    CONTACT_INSERTION: 50,
-    CAMPAIGN_EXECUTION: 100,
-    MESSAGE_DELIVERY: 50
+    CSV_PARSING: 500,
+    CONTACT_INSERTION: 500,
+    CAMPAIGN_EXECUTION: 500,
+    MESSAGE_DELIVERY: 500
   },
 
   SIMULATION: {
