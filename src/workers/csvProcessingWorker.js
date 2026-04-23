@@ -1,11 +1,17 @@
 const amqp = require('amqplib');
 const axios = require('axios');
 const csv = require('csv-parser');
-const { RABBITMQ_URL, QUEUES, DLQS, BATCH_SIZES, RABBITMQ, CSV_RECORDS_LIMIT } = require('../config/constants');
+const mongoose = require('mongoose');
+const CsvUpload = require('../models/CsvUpload');
+const { RABBITMQ_URL, QUEUES, DLQS, BATCH_SIZES, RABBITMQ, CSV_RECORDS_LIMIT, MONGO_URI } = require('../config/constants');
 const { handleRetry } = require('../utils/retryHandler');
 
 const startWorker = async () => {
   try {
+    if (mongoose.connection.readyState !== 1) {
+      await mongoose.connect(MONGO_URI);
+    }
+
     const connection = await amqp.connect(RABBITMQ_URL);
     const channel = await connection.createChannel();
     
@@ -30,6 +36,7 @@ const startWorker = async () => {
 
           let batch = [];
           let recordCount = 0;
+          let invalidCount = 0;
           let limitReached = false;
 
           response.data.pipe(csv())
@@ -65,6 +72,8 @@ const startWorker = async () => {
                   channel.sendToQueue(QUEUES.CONTACT_CREATION, Buffer.from(JSON.stringify({ batch, jobId })), { persistent: true });
                   batch = [];
                 }
+              } else {
+                invalidCount++;
               }
             })
             .on('end', () => {
@@ -72,6 +81,10 @@ const startWorker = async () => {
                 channel.sendToQueue(QUEUES.CONTACT_CREATION, Buffer.from(JSON.stringify({ batch, jobId })), { persistent: true });
               }
               console.log(`Finished processing CSV job ${jobId}`);
+              CsvUpload.findOneAndUpdate(
+                { jobId }, 
+                { totalRecords: recordCount, $inc: { failCount: invalidCount } }
+              ).catch(console.error);
               channel.ack(msg);
             })
             .on('error', async (err) => {

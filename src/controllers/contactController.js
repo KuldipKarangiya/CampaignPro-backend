@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const Contact = require('../models/Contact');
+const CsvUpload = require('../models/CsvUpload');
 const { getChannel } = require('../config/rabbitmq');
 const { QUEUES } = require('../config/constants');
 
@@ -12,6 +13,9 @@ const uploadCSV = async (req, res) => {
 
     const jobId = crypto.randomUUID();
     
+    // Track upload history
+    await CsvUpload.create({ jobId, csvUrl });
+
     // Push to queue
     const channel = getChannel();
     channel.sendToQueue(QUEUES.CSV_PROCESSING, Buffer.from(JSON.stringify({ csvUrl, jobId })), { persistent: true });
@@ -131,7 +135,21 @@ const getContacts = async (req, res) => {
   }
 };
 
+const getUploads = async (req, res) => {
+  try {
+    const uploads = await CsvUpload.find().sort({ createdAt: -1 });
+    return res.status(200).json({
+      message: "CSV uploads retrieved successfully",
+      data: { uploads }
+    });
+  } catch (error) {
+    console.error("Get uploads error:", error);
+    return res.status(500).json({ message: "Internal server error", data: null });
+  }
+};
+
 module.exports = {
   uploadCSV,
-  getContacts
+  getContacts,
+  getUploads
 };

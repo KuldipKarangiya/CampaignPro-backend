@@ -39,6 +39,16 @@ A comprehensive reference for every database query in the Campaign Management Sy
 
 ---
 
+### 1.4 `csvuploads` Collection
+
+| Index Name | Fields | Type | Purpose |
+|---|---|---|---|
+| `_id_` | `_id: 1` | Default | Primary-key lookups |
+| `jobId_1` | `jobId: 1` | Unique | Worker updates (`findOneAndUpdate`) |
+| `createdAt_-1` | `createdAt: -1` | Single Field | Sorting upload history |
+
+---
+
 ## 2. Query-by-Query Analysis
 
 ### Q1 — Contact List with Cursor Pagination
@@ -308,6 +318,31 @@ IXSCAN  →  createdAt_-1__id_-1
 
 ---
 
+### Q9 — CSV Upload History Listing
+
+**Route:** `GET /api/contacts/uploads`
+
+```javascript
+CsvUpload.find().sort({ createdAt: -1 })
+```
+
+**Explain Plan:**
+
+```
+IXSCAN  →  createdAt_-1
+  └─ FETCH  →  return documents
+```
+
+| Metric | Value |
+|---|---|
+| Index | `createdAt_-1` |
+| In-memory sort | No |
+| Documents examined | Total count of uploads |
+
+> **Scale note:** The descending index on `createdAt` allows the database to stream the uploads history ordered by most recent directly from the index tree without needing to buffer and sort in memory.
+
+---
+
 ## 3. Avoiding COLLSCAN — Full Reference
 
 A **COLLSCAN** at 1 M+ records can take 2–30 seconds depending on hardware. Every production query path avoids it:
@@ -396,6 +431,10 @@ db.campaigns.createIndex({ createdAt: -1, _id: -1 });
 // messages
 db.messages.createIndex({ campaignId: 1, status: 1 });
 db.messages.createIndex({ status: 1 });
+
+// csvuploads
+db.csvuploads.createIndex({ jobId: 1 }, { unique: true });
+db.csvuploads.createIndex({ createdAt: -1 });
 ```
 
 Mongoose auto-creates these on startup via `autoIndex: true` (default). In production, set `autoIndex: false` and run the above manually during deployment.

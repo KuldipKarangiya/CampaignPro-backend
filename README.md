@@ -84,6 +84,7 @@ A production-grade, distributed backend for contact management and bulk campaign
 contacts    — stores all contacts (1M+ target)
 campaigns   — stores campaign metadata
 messages    — stores per-contact delivery records (can reach 10M+)
+csvuploads  — stores upload history and success/fail metrics
 ```
 
 ### Schema: `contacts`
@@ -168,6 +169,30 @@ status_1               — single field, global retry / monitoring queries
 ```
 
 **Scale note:** With 1 M contacts × 10 campaigns = 10 M message documents. The compound index ensures per-campaign queries are O(log N) regardless of total collection size.
+
+---
+
+### Schema: `csvuploads`
+
+```javascript
+{
+  _id:          ObjectId,
+  jobId:        String,       // unique, index
+  csvUrl:       String,
+  successCount: Number,
+  failCount:    Number,
+  totalRecords: Number,
+  createdAt:    Date,         // indexed for sorting
+  updatedAt:    Date
+}
+```
+
+**Indexes on `csvuploads`:**
+
+```
+jobId_1       — unique, fast lookup for worker updates
+createdAt_-1  — sorting for upload history list
+```
 
 ---
 
