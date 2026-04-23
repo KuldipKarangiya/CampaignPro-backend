@@ -4,16 +4,63 @@ A production-grade, distributed backend for contact management and bulk campaign
 
 ---
 
+## Quick Start (Setup & Run)
+
+### Prerequisites
+
+- **Node.js**: ≥ 22.14.0
+- **Docker & Docker Compose**: For RabbitMQ and Redis
+- **MongoDB**: Atlas cluster (recommended) or local instance (≥ 6.0)
+
+### 1. Initialize Project
+
+```bash
+# Install dependencies
+npm install
+
+# Setup environment variables
+cp .env.example .env
+# Edit .env with your Cloudinary credentials and DB URIs
+```
+
+### 2. Start Infrastructure
+
+```bash
+docker-compose up -d
+```
+
+This starts:
+- **RabbitMQ** (Port `5673`) + Management UI (`15673`)
+- **Redis** (Port `6377`) + Redis Commander (`8081`)
+
+### 3. Run Application
+
+```bash
+# Development mode (with auto-reload)
+npm run dev
+
+# Production mode
+npm start
+```
+
+### 4. Verify Setup
+- **API Docs**: [http://localhost:3000/api-docs](http://localhost:3000/api-docs)
+- **RabbitMQ UI**: [http://localhost:15673](http://localhost:15673) (guest/guest)
+- **Redis UI**: [http://localhost:8081](http://localhost:8081)
+
+---
+
 ## Table of Contents
 
-1. [System Architecture](#system-architecture)
-2. [Database Design](#database-design)
-3. [API Reference](#api-reference)
-4. [Worker Pipeline](#worker-pipeline)
-5. [Scalability Strategies](#scalability-strategies)
-6. [Setup & Installation](#setup--installation)
+1. [Quick Start (Setup & Run)](#quick-start-setup--run)
+2. [System Architecture](#system-architecture)
+3. [Database Design](#database-design)
+4. [API Reference](#api-reference)
+5. [Worker Pipeline](#worker-pipeline)
+6. [Scalability Strategies](#scalability-strategies)
 7. [Design Decisions](#design-decisions)
 8. [Monitoring & Observability](#monitoring--observability)
+9. [Query Performance Reference](#query-performance-reference)
 
 ---
 
@@ -406,9 +453,12 @@ campaignExecutionWorker
   • Loads campaign + audienceFilter from DB
   • Opens DB cursor: Contact.find(filter).cursor()
   • Streams contacts (never loads all into memory)
-  • Creates Message docs in bulk (500/batch)
-  • Updates campaign.totalContacts
-  • Publishes message IDs to [msg.delivery queue]
+  • **Deduplication**: Uses a Redis Set (`idemp:campaign:{id}:contacts`) to track processed contacts in real-time.
+  • Discards duplicate contacts within the same execution job.
+  • Creates Message docs in bulk (500/batch).
+  • Updates campaign.totalContacts (adjusting for dropped duplicates).
+  • Publishes message IDs to [msg.delivery queue].
+  • **Cleanup**: Deletes the Redis Set immediately after execution finishes to free memory.
      │
      ▼
 [msg.delivery queue]
@@ -454,6 +504,7 @@ messageDeliveryWorker (can run N instances)
 | Dashboard polling load | Pre-computed counters via `$inc` — no aggregation |
 | Bulk delivery updates | `updateMany` with `_id` primary key array |
 | Parallel delivery workers | Stateless workers; RabbitMQ distributes load evenly |
+| Message Idempotency | **Redis Distributed Locking** (Sets) — prevents duplicate sends during retries |
 | Long-term storage growth | Future: TTL index to archive old messages |
 
 ### Horizontal Scaling Path
@@ -478,56 +529,7 @@ Counters stored in Redis — consistent across all API instances. Redis failure 
 
 ---
 
-## Setup & Installation
 
-### Prerequisites
-
-- Node.js ≥ 22.14.0
-- Docker & Docker Compose (for RabbitMQ + Redis)
-- MongoDB Atlas cluster or local MongoDB ≥ 6.0
-
-### 1. Start infrastructure
-
-```bash
-docker-compose up -d
-```
-
-This starts:
-- **RabbitMQ** on port `5673` (AMQP) + **Management UI** on `http://localhost:15673`
-- **Redis** on port `6377` + **Management UI** (Redis Commander) on `http://localhost:8081`
-
-### 2. Install dependencies
-
-```bash
-npm install
-```
-
-### 3. Configure environment
-
-```env
-PORT=3000
-MONGO_URI=mongodb://localhost:27017/campaign-management-system
-REDIS_URL=redis://localhost:6377
-RABBITMQ_URL=amqp://guest:guest@localhost:5673
-```
-
-### 4. Start the server
-
-```bash
-npm run start        # production
-npx nodemon src/server.js  # development (auto-reload)
-```
-
-### 5. Verify indexes exist
-
-```bash
-# In mongosh
-db.contacts.getIndexes()
-db.campaigns.getIndexes()
-db.messages.getIndexes()
-```
-
----
 
 ## Design Decisions
 
@@ -566,6 +568,13 @@ db.messages.getIndexes()
 - ✅ Prevents double-start race condition
 - ✅ Single round-trip to DB
 - ✅ Returns updated document in one query
+
+### 7. Redis Distributed Locking for Message Idempotency
+
+- ✅ **Intra-process Deduplication**: Uses Redis Sets to track `contactId`s processed during a single campaign run.
+- ✅ **Distributed Memory Safety**: If the audience filter returns duplicates, Redis blocks them at O(1) speed before they ever reach the database.
+- ✅ **Ephemeral Storage**: Locks are automatically cleared (`DEL`) as soon as the worker finishes, keeping Redis memory footprint low.
+- ✅ **Durable Fallback**: If a worker crashes and retries, the locking mechanism prevents re-sending to contacts that were already queued.
 
 ---
 

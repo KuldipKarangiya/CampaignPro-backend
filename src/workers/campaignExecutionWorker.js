@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const Campaign = require('../models/Campaign');
 const Contact = require('../models/Contact');
 const Message = require('../models/Message');
+const { redisClient } = require('../config/redis');
 const { RABBITMQ_URL, QUEUES, DLQS, MONGO_URI, BATCH_SIZES, RABBITMQ } = require('../config/constants');
 const { handleRetry } = require('../utils/retryHandler');
 
@@ -19,6 +20,32 @@ const startWorker = async () => {
 
     // Apply specific prefetch
     await channel.prefetch(RABBITMQ.CAMPAIGN_EXECUTION.PREFETCH);
+
+    const processBatch = async (batch, campaignId, ch) => {
+      if (batch.length === 0) return;
+      
+      const multi = redisClient.multi();
+      for (const msg of batch) {
+        multi.sAdd(`idemp:campaign:${campaignId}:contacts`, msg.contactId.toString());
+      }
+      
+      const results = await multi.exec();
+      const uniqueMessages = batch.filter((_, idx) => results[idx] === 1);
+      const duplicatesCount = batch.length - uniqueMessages.length;
+      
+      if (uniqueMessages.length > 0) {
+        const insertedMessages = await Message.insertMany(uniqueMessages);
+        const messageIds = insertedMessages.map(m => m._id);
+        ch.sendToQueue(QUEUES.MESSAGE_DELIVERY, Buffer.from(JSON.stringify({ campaignId, messageIds })), { persistent: true });
+      }
+      
+      if (duplicatesCount > 0) {
+        // Adjust campaign counters to reflect dropped duplicates
+        await Campaign.findByIdAndUpdate(campaignId, { 
+          $inc: { totalContacts: -duplicatesCount, pendingCount: -duplicatesCount } 
+        }).catch(console.error);
+      }
+    };
 
     const consumeTask = async (msg) => {
       if (msg !== null) {
@@ -64,18 +91,17 @@ const startWorker = async () => {
             processedInThisWorker++;
 
             if (messagesBatch.length >= BATCH_SIZES.CAMPAIGN_EXECUTION) {
-              const insertedMessages = await Message.insertMany(messagesBatch);
-              const messageIds = insertedMessages.map(m => m._id);
-              channel.sendToQueue(QUEUES.MESSAGE_DELIVERY, Buffer.from(JSON.stringify({ campaignId, messageIds })), { persistent: true });
+              await processBatch(messagesBatch, campaignId, channel);
               messagesBatch = [];
             }
           }
 
           if (messagesBatch.length > 0) {
-            const insertedMessages = await Message.insertMany(messagesBatch);
-            const messageIds = insertedMessages.map(m => m._id);
-            channel.sendToQueue(QUEUES.MESSAGE_DELIVERY, Buffer.from(JSON.stringify({ campaignId, messageIds })), { persistent: true });
+            await processBatch(messagesBatch, campaignId, channel);
           }
+
+          // Free Redis memory after process completes
+          await redisClient.del(`idemp:campaign:${campaignId}:contacts`).catch(console.error);
 
           console.log(`Campaign ${campaignId} execution initialization finished.`);
 
@@ -86,6 +112,7 @@ const startWorker = async () => {
           console.error(`Campaign execution failed for ${campaignId}:`, err);
           try {
             await Campaign.findByIdAndUpdate(campaignId, { status: 'Failed' });
+            await redisClient.del(`idemp:campaign:${campaignId}:contacts`);
           } catch(e) {}
           await handleRetry(channel, QUEUES.CAMPAIGN_EXECUTION, DLQS.CAMPAIGN_EXECUTION, msg, err);
         }
